@@ -1,0 +1,70 @@
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto/config/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    networks:
+      - mine-net
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-mine}
+      POSTGRES_USER: ${POSTGRES_USER:-mine}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mine}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - mine-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-mine}"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  publisher:
+    build: ./publisher
+    environment:
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "1883"
+      PUBLISH_INTERVAL: "${PUBLISH_INTERVAL:-2.0}"
+    depends_on:
+      mosquitto:
+        condition: service_started
+    networks:
+      - mine-net
+    restart: unless-stopped
+
+  consumer:
+    build: ./consumer
+    ports:
+      - "8000:8000"
+    environment:
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "1883"
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: ${POSTGRES_DB:-mine}
+      DB_USER: ${POSTGRES_USER:-mine}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-mine}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mosquitto:
+        condition: service_started
+    networks:
+      - mine-net
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+
+networks:
+  mine-net:
+    driver: bridge
