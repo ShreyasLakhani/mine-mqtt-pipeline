@@ -1,0 +1,2 @@
+*.sh text eol=lf
+mosquitto/config/* text eol=lf

@@ -3,6 +3,9 @@
 Publishes temperature, methane, and vibration readings every N seconds
 to the Mosquitto broker. Methane readings occasionally exceed the 25 % LEL
 alarm threshold to produce realistic data.
+
+Each sensor connects as its own MQTT user (sensor-<id>) with its own
+password, so the broker ACL can limit every sensor to its own topic.
 """
 
 import json
@@ -25,6 +28,15 @@ MQTT_HOST: str = os.getenv("MQTT_HOST", "mosquitto")
 MQTT_PORT: int = int(os.getenv("MQTT_PORT", "1883"))
 PUBLISH_INTERVAL: float = float(os.getenv("PUBLISH_INTERVAL", "2.0"))
 ALARM_PROBABILITY: float = float(os.getenv("ALARM_PROBABILITY", "0.15"))
+
+
+def _sensor_password(sensor_id: str) -> str:
+    """Read a sensor's MQTT password, e.g. MQTT_METHANE_PASSWORD."""
+    value = os.getenv(f"MQTT_{sensor_id.upper()}_PASSWORD")
+    if not value:
+        logger.critical("event=missing_password sensor_id=%s", sensor_id)
+        sys.exit(1)
+    return value
 
 # ---------------------------------------------------------------------------
 # Sensor definitions
@@ -130,14 +142,14 @@ def generate_reading(sensor: dict[str, Any]) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
-def main() -> None:
-    signal.signal(signal.SIGTERM, _handle_signal)
-    signal.signal(signal.SIGINT, _handle_signal)
-
+def connect_sensor(sensor: dict[str, Any]) -> mqtt.Client:
+    """Create and connect one MQTT client that logs in as this sensor."""
+    sensor_id: str = sensor["sensor_id"]
     client = mqtt.Client(
         callback_api_version=CallbackAPIVersion.VERSION2,
-        client_id="mine-publisher",
+        client_id=f"mine-publisher-{sensor_id}",
     )
+    client.username_pw_set(f"sensor-{sensor_id}", _sensor_password(sensor_id))
     client.on_connect = on_connect
     client.on_disconnect = on_disconnect
     client.reconnect_delay_set(min_delay=1, max_delay=30)
@@ -149,18 +161,32 @@ def main() -> None:
             break
         except (ConnectionRefusedError, OSError) as exc:
             logger.warning(
-                "event=connect_retry attempt=%d error=%s", attempt, exc
+                "event=connect_retry sensor_id=%s attempt=%d error=%s",
+                sensor_id,
+                attempt,
+                exc,
             )
             time.sleep(2)
     else:
         logger.critical(
-            "event=connect_failed_permanently broker=%s:%d",
+            "event=connect_failed_permanently broker=%s:%d sensor_id=%s",
             MQTT_HOST,
             MQTT_PORT,
+            sensor_id,
         )
         sys.exit(1)
 
     client.loop_start()
+    return client
+
+
+def main() -> None:
+    signal.signal(signal.SIGTERM, _handle_signal)
+    signal.signal(signal.SIGINT, _handle_signal)
+
+    clients: dict[str, mqtt.Client] = {
+        sensor["sensor_id"]: connect_sensor(sensor) for sensor in SENSORS
+    }
     logger.info(
         "event=publishing_started interval=%.1fs sensors=%d",
         PUBLISH_INTERVAL,
@@ -172,7 +198,9 @@ def main() -> None:
             for sensor in SENSORS:
                 reading = generate_reading(sensor)
                 payload = json.dumps(reading)
-                client.publish(sensor["topic"], payload, qos=1)
+                clients[sensor["sensor_id"]].publish(
+                    sensor["topic"], payload, qos=1
+                )
                 logger.info(
                     "event=published topic=%s sensor_id=%s value=%.2f",
                     sensor["topic"],
@@ -181,8 +209,9 @@ def main() -> None:
                 )
             time.sleep(PUBLISH_INTERVAL)
     finally:
-        client.loop_stop()
-        client.disconnect()
+        for client in clients.values():
+            client.loop_stop()
+            client.disconnect()
         logger.info("event=shutdown_complete")
 
 

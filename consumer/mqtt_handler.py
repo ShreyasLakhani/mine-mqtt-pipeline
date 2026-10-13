@@ -126,7 +126,12 @@ def _on_message(
 # ---------------------------------------------------------------------------
 # Lifecycle
 # ---------------------------------------------------------------------------
-def start(mqtt_host: str, mqtt_port: int) -> mqtt.Client:
+def start(
+    mqtt_host: str,
+    mqtt_port: int,
+    username: Optional[str] = None,
+    password: Optional[str] = None,
+) -> mqtt.Client:
     """Connect to the broker and start the network loop thread."""
     global _client
     _client = mqtt.Client(
@@ -136,6 +141,8 @@ def start(mqtt_host: str, mqtt_port: int) -> mqtt.Client:
     _client.on_connect = _on_connect
     _client.on_disconnect = _on_disconnect
     _client.on_message = _on_message
+    if username:
+        _client.username_pw_set(username, password)
     _client.reconnect_delay_set(min_delay=1, max_delay=30)
 
     # Retry initial connection — broker may still be starting

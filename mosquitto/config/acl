@@ -1,0 +1,15 @@
+# Access control list. Anything not listed here is denied.
+
+# Consumer can read every sensor topic and cannot publish.
+user consumer
+topic read mine/sensors/#
+
+# Each sensor can only write to its own topic.
+user sensor-temperature
+topic write mine/sensors/temperature
+
+user sensor-methane
+topic write mine/sensors/methane
+
+user sensor-vibration
+topic write mine/sensors/vibration

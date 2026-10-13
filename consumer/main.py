@@ -21,6 +21,8 @@ import mqtt_handler
 # ---------------------------------------------------------------------------
 MQTT_HOST: str = os.getenv("MQTT_HOST", "mosquitto")
 MQTT_PORT: int = int(os.getenv("MQTT_PORT", "1883"))
+MQTT_USERNAME: Optional[str] = os.getenv("MQTT_USERNAME")
+MQTT_PASSWORD: Optional[str] = os.getenv("MQTT_PASSWORD")
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -47,7 +49,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     db.init_schema()
 
     # Start MQTT subscription (runs in background thread)
-    mqtt_handler.start(MQTT_HOST, MQTT_PORT)
+    mqtt_handler.start(MQTT_HOST, MQTT_PORT, MQTT_USERNAME, MQTT_PASSWORD)
     logger.info("event=startup_complete")
 
     yield

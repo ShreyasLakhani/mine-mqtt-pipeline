@@ -50,8 +50,8 @@ The publisher injects alarm-level methane readings roughly 15% of the time to pr
 
 ## Service Components
 
-* **Publisher**: A Python script simulating three sensor nodes. Every two seconds it generates a reading and publishes over MQTT.
-* **Mosquitto Broker**: Eclipse Mosquitto running on port 1883.
+* **Publisher**: A Python script simulating three sensor nodes. Each sensor connects as its own MQTT user. Every two seconds it generates a reading and publishes over MQTT.
+* **Mosquitto Broker**: Eclipse Mosquitto running on port 1883. Anonymous access is off. Every client logs in, and an ACL limits what each one can read or write.
 * **Consumer**: A background thread inside the FastAPI container. Subscribes to the sensor topics, evaluates readings against alarm thresholds, and writes to PostgreSQL.
 * **Database**: PostgreSQL 16 stores historical readings.
 * **REST API**: FastAPI exposes endpoints for health, latest readings, and alarm history.
@@ -67,8 +67,11 @@ Docker and Docker Compose.
 
 ```bash
 git clone <repo-url> && cd mine-mqtt-pipeline
+cp .env.example .env      # then change every password in .env
 docker compose up --build
 ```
+
+The broker will not start until all four MQTT passwords are set in `.env`.
 
 Wait about 10 seconds for PostgreSQL and the services to pass their health checks.
 
@@ -104,6 +107,44 @@ The `-v` flag also removes the PostgreSQL volume.
 
 ---
 
+## Broker Security
+
+Mosquitto runs with `allow_anonymous false`, a password file and an access control list.
+
+| MQTT user | Can write | Can read |
+|---|---|---|
+| `sensor-temperature` | `mine/sensors/temperature` | nothing |
+| `sensor-methane` | `mine/sensors/methane` | nothing |
+| `sensor-vibration` | `mine/sensors/vibration` | nothing |
+| `consumer` | nothing | `mine/sensors/#` |
+
+* Passwords live only in `.env`, which is git-ignored. `.env.example` holds placeholders.
+* At container start, `mosquitto/init-auth.sh` hashes the passwords into a password file with `mosquitto_passwd`, sets owner and permissions, then starts the broker.
+* Least privilege: a compromised sensor cannot fake readings for another sensor, and the consumer cannot publish.
+
+### Testing the rules
+
+Run these from a second terminal while the stack is up. Replace the passwords with the ones in your `.env`.
+
+```bash
+# 1. No login: refused
+docker compose exec mosquitto mosquitto_pub -t mine/sensors/methane -m test
+# Connection error: Connection Refused: not authorised.
+
+# 2. Wrong password: refused
+docker compose exec mosquitto mosquitto_pub -u sensor-methane -P wrong -t mine/sensors/methane -m test
+# Connection error: Connection Refused: not authorised.
+
+# 3. Sensor writing to another sensor's topic: dropped
+#    Terminal A (watch as the consumer user):
+docker compose exec mosquitto mosquitto_sub -u consumer -P <consumer-password> -t 'mine/sensors/#' -v
+#    Terminal B (temperature sensor tries to fake a methane reading):
+docker compose exec mosquitto mosquitto_pub -u sensor-temperature -P <temperature-password> -t mine/sensors/methane -m SPOOF
+# Terminal A never shows SPOOF. Real readings keep arriving.
+```
+
+---
+
 ## Design Decisions
 
 ### MQTT QoS 1
@@ -124,7 +165,7 @@ Both publisher and consumer use paho's built-in reconnect (`reconnect_delay_set(
 
 The following were deliberately left out to keep the demo focused:
 
-* **Security**: Anonymous broker access, no TLS. Acceptable because all traffic stays inside the Docker bridge network.
+* **TLS**: Logins and ACLs are on, but traffic is not encrypted. Acceptable here because all traffic stays inside the Docker bridge network. A site deployment would add TLS on port 8883.
 * **Database Migrations**: Schema is created from a single SQL file on startup. No Alembic.
 * **Frontend**: Backend only. The REST API returns JSON.
 * **Testing**: Not included. Integration testing is via the documented curl commands. A production version would add pytest coverage for `mqtt_handler._on_message` payload parsing and `db.insert_reading` SQL.
@@ -150,6 +191,8 @@ source .venv/bin/activate         # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 
 export MQTT_HOST=localhost        # Windows PowerShell: $env:MQTT_HOST="localhost"
+export MQTT_USERNAME=consumer
+export MQTT_PASSWORD=<consumer password from .env>
 export DB_HOST=localhost
 
 uvicorn main:app --reload --port 8000
@@ -162,6 +205,9 @@ cd publisher
 pip install -r requirements.txt
 
 export MQTT_HOST=localhost
+export MQTT_TEMPERATURE_PASSWORD=<from .env>
+export MQTT_METHANE_PASSWORD=<from .env>
+export MQTT_VIBRATION_PASSWORD=<from .env>
 python publisher.py
 ```
 
@@ -173,7 +219,10 @@ python publisher.py
 mine-mqtt-pipeline/
 ├── docker-compose.yml          # 4-service orchestration
 ├── mosquitto/
-│   └── config/mosquitto.conf   # Broker config (anonymous, no TLS)
+│   ├── init-auth.sh            # Hashes passwords from .env, then starts the broker
+│   └── config/
+│       ├── mosquitto.conf      # Broker config (login required, ACL on)
+│       └── acl                 # Per-user topic permissions
 ├── publisher/
 │   ├── Dockerfile
 │   ├── requirements.txt        # paho-mqtt 2.1

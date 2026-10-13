@@ -3,8 +3,16 @@ services:
     image: eclipse-mosquitto:2
     ports:
       - "1883:1883"
+    command: ["/bin/sh", "/init-auth.sh"]
+    environment:
+      MQTT_CONSUMER_PASSWORD: ${MQTT_CONSUMER_PASSWORD:?set it in .env}
+      MQTT_TEMPERATURE_PASSWORD: ${MQTT_TEMPERATURE_PASSWORD:?set it in .env}
+      MQTT_METHANE_PASSWORD: ${MQTT_METHANE_PASSWORD:?set it in .env}
+      MQTT_VIBRATION_PASSWORD: ${MQTT_VIBRATION_PASSWORD:?set it in .env}
     volumes:
       - ./mosquitto/config/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./mosquitto/config/acl:/mosquitto/config/acl:ro
+      - ./mosquitto/init-auth.sh:/init-auth.sh:ro
     networks:
       - mine-net
     restart: unless-stopped
@@ -34,6 +42,9 @@ services:
       MQTT_HOST: mosquitto
       MQTT_PORT: "1883"
       PUBLISH_INTERVAL: "${PUBLISH_INTERVAL:-2.0}"
+      MQTT_TEMPERATURE_PASSWORD: ${MQTT_TEMPERATURE_PASSWORD:?set it in .env}
+      MQTT_METHANE_PASSWORD: ${MQTT_METHANE_PASSWORD:?set it in .env}
+      MQTT_VIBRATION_PASSWORD: ${MQTT_VIBRATION_PASSWORD:?set it in .env}
     depends_on:
       mosquitto:
         condition: service_started
@@ -48,6 +59,8 @@ services:
     environment:
       MQTT_HOST: mosquitto
       MQTT_PORT: "1883"
+      MQTT_USERNAME: consumer
+      MQTT_PASSWORD: ${MQTT_CONSUMER_PASSWORD:?set it in .env}
       DB_HOST: postgres
       DB_PORT: "5432"
       DB_NAME: ${POSTGRES_DB:-mine}
